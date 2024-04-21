@@ -13,9 +13,12 @@ def getData(lat, lon, sites, variables = ['temperature_2m','cloud_cover']):
     Returns:
         _type_: _description_
     """
-
-    lat = ','.join(lat)
-    lon = ','.join(lon)
+    if len(sites) > 1:
+        lat = ','.join(lat)
+        lon = ','.join(lon)
+    else:
+        lat = lat[0]
+        lon = lon[0]
     variables = ','.join(variables)
 
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly={variables}&models=ecmwf_ifs025,ecmwf_aifs025,bom_access_global,gfs_global&timezone=GMT"
@@ -35,11 +38,13 @@ def getData(lat, lon, sites, variables = ['temperature_2m','cloud_cover']):
         mdata.index = pd.to_datetime(mdata['time'])
         mdata = mdata.drop('time', axis =1)
         return mdata
+    
+    if len(sites) >1:
+        dlist = []
+        for d, site in zip(data, sites):
+            df = makeFrame(d)
+            df['site'] = site
+            dlist.append(df)
+        return pd.concat(dlist)
 
-    dlist = []
-    for d, site in zip(data, sites):
-        df = makeFrame(d)
-        df['site'] = site
-        dlist.append(df)
-
-    return pd.concat(dlist)
+    return makeFrame(data)

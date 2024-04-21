@@ -1,11 +1,16 @@
 import plotly.graph_objects as go
+import dash
 from dash import Dash, dcc, html, Input, Output
 
 import plotly.express as px
 
 from om_extract import getData
 
-app = Dash(__name__)
+external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
+app = dash.Dash(__name__, external_stylesheets = external_stylesheets)
+application = app.server
+app.title='ForeSight Forecast'
+
 
 
 app.layout = html.Div([
@@ -31,4 +36,5 @@ def display_time_series(site):
     return fig
 
 
-app.run_server(debug=True, use_reloader=False)
+if __name__ == '__main__': 
+    app.run_server(debug = True, host = '0.0.0.0',  port = 8050)
