@@ -23,7 +23,14 @@ VALID_USERNAME_PASSWORD_PAIRS = {
 }
 
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+app = dash.Dash(__name__, external_stylesheets=[{  "href": "https://fonts.googleapis.com/css2?"
+                "family=Lato:wght@400;700&display=swap",
+        "rel": "stylesheet",
+    },dbc.themes.ZEPHYR])
+
+from dash_bootstrap_templates import load_figure_template
+load_figure_template('ZEPHYR')
+
 
 # Add basic authentication
 auth = dash_auth.BasicAuth(
@@ -31,9 +38,63 @@ auth = dash_auth.BasicAuth(
     VALID_USERNAME_PASSWORD_PAIRS
 )
 
+
+def get_yaxis_title(column):
+    # Define a dictionary that maps column names to y-axis titles
+    title_dict = {
+        'shortwave_radiation': 'Shortwave Radiation (W/m²)',
+        'wind_speed_10m': 'Wind Speed at 10m (m/s)',
+        'temperature_2m': 'Temperature at 2m (°C)',
+        'cloud_cover': 'Cloud Cover (%)',
+        # Add more mappings as needed
+    }
+
+    # Return the corresponding y-axis title if it exists, otherwise return the column name
+    return title_dict.get(column, column)
+
 # App layout
+
 app.layout = dbc.Container(fluid=True, children=[
-    html.H1(children='Helios Forecasting Dashboard'),
+    html.Div(
+        children=[
+            html.H1(
+                children='Helios Forecasting Dashboard',
+                className="header-title",
+                style={'textAlign': 'left', 'color': 'white'}
+            ),
+            html.P(
+                children='Welcome to the Helios Forecasting Dashboard. We produce site based weather forecasts.',
+                className="header-description",
+                style={'textAlign': 'left', 'color': 'white'}
+            ),
+        ],
+        className="header-div",
+        style={'padding': '20px', 'backgroundColor': '#555555', 'width': '100%'}
+    ),
+    html.H3(children='Site Forecast', style={'textAlign': 'left'}),
+    dbc.Row(children=[
+        dbc.Col(md=6, children=[
+            dcc.Dropdown(
+                id='site-dropdown',
+                options=[
+                    {'label': site, 'value': site} for site in scatter_geo_df['site']
+                ],
+                value='Brisbane',  # Default value
+                style={'marginBottom': '10px'}  # Add padding
+            ),
+        ]),
+        dbc.Col(md=6, children=[
+            dcc.Dropdown(
+                 id='column-dropdown',
+                 options=[
+                     {'label': get_yaxis_title(column), 'value': column} for column in ['shortwave_radiation', 'wind_speed_10m', 'temperature_2m', 'cloud_cover']
+                 ],
+                 value=params[0],  # Default value
+                 style={'marginBottom': '10px'}  # Add padding
+            ),
+            # Your other components go here
+        ]),
+    ]),
     dbc.Row(children=[
         dbc.Col(md=6, children=[
             dcc.Graph(
@@ -75,26 +136,6 @@ app.layout = dbc.Container(fluid=True, children=[
             )
         ]),
     ]),
-    dbc.Row(children=[
-        dbc.Col(md=6, children=[
-            dcc.Dropdown(
-                id='site-dropdown',
-                options=[
-                    {'label': site, 'value': site} for site in scatter_geo_df['site']
-                ],
-                value='Brisbane'  # Default value
-            ),
-        ]),
-        dbc.Col(md=6, children=[
-            dcc.Dropdown(
-                 id='column-dropdown',
-                 options=[
-                     {'label': column, 'value': column} for column in params
-                 ],
-                 value=params[0],)  # Default value
-            # Your other components go here
-        ]),
-    ]),
 ])
 
 
@@ -127,7 +168,8 @@ def update_plot(selected_site, selected_column):
 
     # Update the layout
     fig.update_layout(
-        title=f'Time Series Line Plot - {selected_site}',
+        title=f'Time Series - {selected_site}',
+        yaxis_title=get_yaxis_title(selected_column),
         legend=dict(
             title='Model',
             font=dict(
@@ -149,7 +191,7 @@ def update_plot(selected_site, selected_column):
         trace.hovertemplate = '<b>%{y}</b><br>%{fullData.name}<extra></extra>'
 
     # Update the y-axis label
-    fig.update_yaxes(title_text=selected_column)
+    fig.update_yaxes(title_text=get_yaxis_title(selected_column))
 
     return fig
 
