@@ -90,3 +90,4 @@ Werkzeug @ file:///home/conda/feedstock_root/build_artifacts/werkzeug_1712099422
 widgetsnbextension @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_cd_nvw5x1_/croot/widgetsnbextension_1679313872684/work
 xgboost==1.7.3
 zipp==3.15.0
+dash-bootstrap-templates
