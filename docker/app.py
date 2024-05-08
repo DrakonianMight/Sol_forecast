@@ -19,6 +19,7 @@ params = ['shortwave_radiation','wind_speed_10m','temperature_2m','cloud_cover']
 # Define valid usernames and passwords
 VALID_USERNAME_PASSWORD_PAIRS = {
     'helios': 'lpeach',
+    'guest': 'shenanigans'
     # Add more username/password pairs as needed
 }
 
