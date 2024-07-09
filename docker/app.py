@@ -14,14 +14,13 @@ import om_extract as om_extract
 # get list of sites and locations
 scatter_geo_df = pd.read_csv('./siteList.csv' ,skipinitialspace=True,usecols= ['site','lat','lon'])
 
-params = ['shortwave_radiation','wind_speed_10m','temperature_2m','cloud_cover']
+params = ['shortwave_radiation','wind_speed_10m', 'wind_gusts_10m','temperature_2m','cloud_cover']
 
 # Define valid usernames and passwords
 VALID_USERNAME_PASSWORD_PAIRS = {
     'helios': 'lpeach',
-    'guest': 'shenanigans'
+    'guest': 'shenanigans'}
     # Add more username/password pairs as needed
-}
 
 
 app = dash.Dash(__name__, external_stylesheets=[{  "href": "https://fonts.googleapis.com/css2?"
@@ -45,8 +44,10 @@ def get_yaxis_title(column):
     title_dict = {
         'shortwave_radiation': 'Shortwave Radiation (W/m²)',
         'wind_speed_10m': 'Wind Speed at 10m (m/s)',
+        'wind_gusts_10m': 'Wind Gusts at 10m (m/s)',
         'temperature_2m': 'Temperature at 2m (°C)',
         'cloud_cover': 'Cloud Cover (%)',
+
         # Add more mappings as needed
     }
 
@@ -88,7 +89,7 @@ app.layout = dbc.Container(fluid=True, children=[
             dcc.Dropdown(
                  id='column-dropdown',
                  options=[
-                     {'label': get_yaxis_title(column), 'value': column} for column in ['shortwave_radiation', 'wind_speed_10m', 'temperature_2m', 'cloud_cover']
+                     {'label': get_yaxis_title(column), 'value': column} for column in ['shortwave_radiation', 'wind_speed_10m', 'wind_gusts_10m', 'temperature_2m', 'cloud_cover']
                  ],
                  value=params[0],  # Default value
                  style={'marginBottom': '10px'}  # Add padding
@@ -151,7 +152,7 @@ def update_plot(selected_site, selected_column):
     mySite = scatter_geo_df[scatter_geo_df['site'] == selected_site]
 
     # Get data for the selected site
-    df = om_extract.getData( [str(mySite.lat.values[0])] , [str(mySite.lon.values[0])]  ,[selected_site], variables = ['shortwave_radiation','wind_speed_10m','temperature_2m','cloud_cover'] )
+    df = om_extract.getData( [str(mySite.lat.values[0])] , [str(mySite.lon.values[0])]  ,[selected_site], variables = ['shortwave_radiation','wind_speed_10m', 'wind_gusts_10m','temperature_2m','cloud_cover'] )
     colName = df.columns[[selected_column in c for c in df.columns]]
     # Create a dictionary mapping original column names to modified names
     new_legend_names = {c: c.replace(selected_column, '') for c in colName}
