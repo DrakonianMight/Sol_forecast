@@ -1,61 +1,60 @@
 import dash
-from dash import dcc, html, callback_context
+from dash import dcc, html
 from dash.dependencies import Input, Output
 import dash_bootstrap_components as dbc
 import dash_auth
 import pandas as pd
 import plotly.graph_objs as go
-
 import plotly.express as px
+import om_extract as om_extract  # Assuming this is your module for extracting data
 
-import om_extract as om_extract
+# Static hourly parameters
+hourly_params = ['shortwave_radiation', 'wind_speed_10m', 'wind_gusts_10m', 'temperature_2m', 'cloud_cover']
+# Static daily parameters
+daily_params = ['temperature_2m_max', 'temperature_2m_min']
 
+# Define a color mapping for each possible column
+color_map = {
+    'ecmwf_ifs025': 'orange',
+    'ecmwf_aifs025': 'red',
+    'bom_access_global': 'green',
+    'gfs_global': 'grey',
+    'cma_grapes_global': 'purple',
+    'ukmo_global_deterministic_10km': 'cyan'
+}
 
-# get list of sites and locations
-scatter_geo_df = pd.read_csv('./siteList.csv' ,skipinitialspace=True,usecols= ['site','lat','lon'])
-
-params = ['shortwave_radiation','wind_speed_10m', 'wind_gusts_10m','temperature_2m','cloud_cover']
+# Get list of sites and locations
+scatter_geo_df = pd.read_csv('./siteList.csv', skipinitialspace=True, usecols=['site', 'lat', 'lon'])
 
 # Define valid usernames and passwords
 VALID_USERNAME_PASSWORD_PAIRS = {
     'helios': 'lpeach',
-    'guest': 'shenanigans'}
-    # Add more username/password pairs as needed
+    'guest': 'w34th3r!!'
+}
 
-
-app = dash.Dash(__name__, external_stylesheets=[{  "href": "https://fonts.googleapis.com/css2?"
-                "family=Lato:wght@400;700&display=swap",
-        "rel": "stylesheet",
-    },dbc.themes.ZEPHYR])
+app = dash.Dash(__name__, external_stylesheets=[{
+    "href": "https://fonts.googleapis.com/css2?family=Lato:wght@400;700&display=swap",
+}, dbc.themes.ZEPHYR])
 
 from dash_bootstrap_templates import load_figure_template
 load_figure_template('ZEPHYR')
 
-
 # Add basic authentication
-auth = dash_auth.BasicAuth(
-    app,
-    VALID_USERNAME_PASSWORD_PAIRS
-)
-
+auth = dash_auth.BasicAuth(app, VALID_USERNAME_PASSWORD_PAIRS)
 
 def get_yaxis_title(column):
-    # Define a dictionary that maps column names to y-axis titles
     title_dict = {
         'shortwave_radiation': 'Shortwave Radiation (W/m²)',
         'wind_speed_10m': 'Wind Speed at 10m (m/s)',
         'wind_gusts_10m': 'Wind Gusts at 10m (m/s)',
         'temperature_2m': 'Temperature at 2m (°C)',
         'cloud_cover': 'Cloud Cover (%)',
-
-        # Add more mappings as needed
+        'temperature_2m_max': 'Max Temperature at 2m (°C)',
+        'temperature_2m_min': 'Min Temperature at 2m (°C)',
     }
-
-    # Return the corresponding y-axis title if it exists, otherwise return the column name
     return title_dict.get(column, column)
 
 # App layout
-
 app.layout = dbc.Container(fluid=True, children=[
     html.Div(
         children=[
@@ -65,7 +64,7 @@ app.layout = dbc.Container(fluid=True, children=[
                 style={'textAlign': 'left', 'color': 'white'}
             ),
             html.P(
-                children='Welcome to the Helios Forecasting Dashboard. We produce site based weather forecasts.',
+                children='Welcome to the Helios Forecasting Dashboard. We produce site-based weather forecasts.',
                 className="header-description",
                 style={'textAlign': 'left', 'color': 'white'}
             ),
@@ -88,13 +87,10 @@ app.layout = dbc.Container(fluid=True, children=[
         dbc.Col(md=6, children=[
             dcc.Dropdown(
                  id='column-dropdown',
-                 options=[
-                     {'label': get_yaxis_title(column), 'value': column} for column in ['shortwave_radiation', 'wind_speed_10m', 'wind_gusts_10m', 'temperature_2m', 'cloud_cover']
-                 ],
-                 value=params[0],  # Default value
-                 style={'marginBottom': '10px'}  # Add padding
+                 options=[],  # Options will be populated dynamically
+                 multi=True,  # Allow multi-select
+                 style={'marginBottom': '10px'}
             ),
-            # Your other components go here
         ]),
     ]),
     dbc.Row(children=[
@@ -121,7 +117,7 @@ app.layout = dbc.Container(fluid=True, children=[
                             ),
                             zoom=3
                         ),
-                        margin=dict(l=25, r=25, t=25, b=25) 
+                        margin=dict(l=25, r=25, t=25, b=25)
                     )
                 }
             ),
@@ -131,8 +127,8 @@ app.layout = dbc.Container(fluid=True, children=[
                 id='time-series-plot',
                 figure={
                     'layout': go.Layout(
-                    margin=dict(l=25, r=25, t=25, b=25),
-                    template="simple_white"  # Adjust as needed
+                        margin=dict(l=25, r=25, t=25, b=25),
+                        template="simple_white"
                     )
                 }
             )
@@ -140,64 +136,81 @@ app.layout = dbc.Container(fluid=True, children=[
     ]),
 ])
 
-
-# Callback to update the plot based on dropdown selection
+# Callback to update dropdown and plot based on site and selected variables
 @app.callback(
-    Output('time-series-plot', 'figure'),
+    [Output('column-dropdown', 'options'),
+     Output('time-series-plot', 'figure')],
     [Input('site-dropdown', 'value'),
      Input('column-dropdown', 'value')]
 )
-def update_plot(selected_site, selected_column):
+def update_variables_and_plot(selected_site, selected_columns):
+    # Combine hourly and daily variables
+    all_variables = [('Hourly: ' + var, var, 'hourly') for var in hourly_params] + \
+                    [('Daily: ' + var, var, 'daily') for var in daily_params]
 
-    mySite = scatter_geo_df[scatter_geo_df['site'] == selected_site]
+    # Generate dropdown options with clearly separated hourly and daily variables
+    dropdown_options = [{'label': label, 'value': var} for label, var, data_type in all_variables]
 
-    # Get data for the selected site
-    df = om_extract.getData( [str(mySite.lat.values[0])] , [str(mySite.lon.values[0])]  ,[selected_site], variables = ['shortwave_radiation','wind_speed_10m', 'wind_gusts_10m','temperature_2m','cloud_cover'] )
-    colName = df.columns[[selected_column in c for c in df.columns]]
-    # Create a dictionary mapping original column names to modified names
-    new_legend_names = {c: c.replace(selected_column, '') for c in colName}
+    # Default to all variables if none is selected
+    selected_columns = selected_columns or [all_variables[0][1]]
 
-    df = df[df.columns[[selected_column in c for c in df.columns]]]
-    df.columns = [new_legend_names[c] for c in df.columns]
-    df = df.drop([col for col in df.columns if df[col].apply(type).eq(type(None)).any()], axis=1)
-
-    # Create a new figure
+    # Create a figure object
     fig = go.Figure()
 
-    # Add a scatter trace for each column
-    for col in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df[col], mode='lines', name=col))
+    # Loop through each selected column and plot the time series
+    for selected_column in selected_columns:
+        # Determine if the selected column is from hourly or daily data
+        selected_data_type = next(data_type for label, var, data_type in all_variables if var == selected_column)
 
-    # Update the layout
+        # Get data based on whether it's hourly or daily
+        if selected_data_type == 'hourly':
+            # Retrieve data from hourly dataset
+            df = om_extract.getData([str(scatter_geo_df[scatter_geo_df['site'] == selected_site]['lat'].values[0])],
+                                    [str(scatter_geo_df[scatter_geo_df['site'] == selected_site]['lon'].values[0])],
+                                    [selected_site],
+                                    variables=hourly_params)
+        elif selected_data_type == 'daily':
+            # Retrieve data from daily dataset
+            df = om_extract.getDailyData([str(scatter_geo_df[scatter_geo_df['site'] == selected_site]['lat'].values[0])],
+                                    [str(scatter_geo_df[scatter_geo_df['site'] == selected_site]['lon'].values[0])],
+                                    [selected_site], variables=daily_params)
+
+        # Filter the dataframe for the selected column
+        df = df[[col for col in df.columns if selected_column in col]]
+
+        # Add traces for each column
+        for col in df.columns:
+            # Remove the parameter name from the variable name in the plot (for a cleaner legend)
+            cleaned_col = col.replace(selected_column, '').strip('_')
+
+            # Get color for the column from the color map
+            color = color_map.get(cleaned_col, 'black')  # Default to black if no color is found
+
+            fig.add_trace(go.Scatter(x=df.index, y=df[col], mode='lines', name=cleaned_col, line=dict(color=color)))
+
+    # Update layout of the plot to include gridlines
     fig.update_layout(
         title=f'Time Series - {selected_site}',
-        yaxis_title=get_yaxis_title(selected_column),
+        yaxis_title="Selected Variables",
         legend=dict(
             title='Model',
-            font=dict(
-                size=10,  # Adjust as needed
-            ),
+            font=dict(size=10),
             orientation="h",
             yanchor="bottom",
-            y=-.75,
+            y=-0.75,
             xanchor="left",
             x=0
         ),
+        xaxis=dict(showgrid=True),  # Enable gridlines for x-axis
+        yaxis=dict(showgrid=True),  # Enable gridlines for y-axis
         hovermode="x unified",
         margin=dict(l=30, r=30, t=30, b=30),
-        template="simple_white"  # Adjust as needed
+        template="simple_white"
     )
 
-    # Update the hover template for each trace
-    for trace in fig.data:
-        trace.hovertemplate = '<b>%{y}</b><br>%{fullData.name}<extra></extra>'
+    return dropdown_options, fig
 
-    # Update the y-axis label
-    fig.update_yaxes(title_text=get_yaxis_title(selected_column))
-
-    return fig
-
-# Callback to update dropdown selection based on marker click
+# Callback to update site selection based on map click
 @app.callback(
     Output('site-dropdown', 'value'),
     [Input('scatter-geo-plot', 'clickData')]
@@ -210,5 +223,5 @@ def update_dropdown(clickData):
         return selected_site
 
 # Run the app
-if __name__ == '__main__': 
-    app.run_server(debug = True, host = '0.0.0.0',  port = 8050)
+if __name__ == '__main__':
+    app.run_server(debug=True, host='0.0.0.0', port=8050)
