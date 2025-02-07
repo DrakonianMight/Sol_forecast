@@ -7,6 +7,8 @@ import pandas as pd
 import plotly.graph_objs as go
 import plotly.express as px
 import om_extract as om_extract  # Assuming this is your module for extracting data
+from datetime import datetime, timedelta
+from meteostat import Stations, Hourly
 
 # Static hourly parameters
 hourly_params = ['shortwave_radiation', 'wind_speed_10m', 'wind_gusts_10m', 'temperature_2m', 'cloud_cover']
@@ -22,6 +24,13 @@ color_map = {
     'cma_grapes_global': 'purple',
     'ukmo_global_deterministic_10km': 'cyan'
 }
+
+# Column name mapping between model data and observational data
+column_mapping = {
+    'temperature_2m': 'temp',  # Model 'temperature_2m' maps to 'temp' in observation data
+    'wind_speed_10m': 'wspd',
+}
+
 
 # Get list of sites and locations
 scatter_geo_df = pd.read_csv('./siteList.csv', skipinitialspace=True, usecols=['site', 'lat', 'lon'])
@@ -53,6 +62,26 @@ def get_yaxis_title(column):
         'temperature_2m_min': 'Min Temperature at 2m (°C)',
     }
     return title_dict.get(column, column)
+
+# Function to fetch nearest stations from Meteostat and get observational data
+def get_nearest_station_data(lat, lon):
+    stations = Stations().nearby(lat, lon).fetch(1)  # Fetch the nearest station
+    station_id = stations.index[0]
+    station_name = stations['name'][0]
+    station_lat = stations['latitude'][0]
+    station_lon = stations['longitude'][0]
+    
+    # Get hourly data for the past 24 hours
+    end = datetime.today()
+    start = end - timedelta(days=1)
+    
+    hourly_data = Hourly(station_id, start, end).fetch()
+    hourly_data["station_name"] = station_name
+    hourly_data["station_lat"] = station_lat
+    hourly_data["station_lon"] = station_lon
+    
+    return hourly_data
+
 
 # App layout
 app.layout = dbc.Container(fluid=True, children=[
@@ -156,6 +185,13 @@ def update_variables_and_plot(selected_site, selected_columns):
 
     # Create a figure object
     fig = go.Figure()
+    
+    # Get the site location
+    site_lat = scatter_geo_df[scatter_geo_df['site'] == selected_site]['lat'].values[0]
+    site_lon = scatter_geo_df[scatter_geo_df['site'] == selected_site]['lon'].values[0]
+
+    # Fetch the nearest observational data
+    obs_data = get_nearest_station_data(site_lat, site_lon)
 
     # Loop through each selected column and plot the time series
     for selected_column in selected_columns:
@@ -187,6 +223,18 @@ def update_variables_and_plot(selected_site, selected_columns):
             color = color_map.get(cleaned_col, 'black')  # Default to black if no color is found
 
             fig.add_trace(go.Scatter(x=df.index, y=df[col], mode='lines', name=cleaned_col, line=dict(color=color)))
+            
+                        # Map the column names from observation data to model data
+        obs_column = column_mapping.get(selected_column, selected_column)  # Use column mapping
+        if obs_column in obs_data.columns:
+            # Add observational data as an additional time series
+            fig.add_trace(go.Scatter(
+                x=obs_data.index,
+                y=obs_data[obs_column],
+                mode='lines',
+                name=obs_data['station_name'].unique()[0],
+                line=dict(color='black')
+            ))
 
     # Update layout of the plot to include gridlines
     fig.update_layout(
