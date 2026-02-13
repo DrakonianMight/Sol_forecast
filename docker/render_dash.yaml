@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: weather-forecast-dash
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile.dash
+    dockerContext: ./docker
+    plan: free
+    envVars:
+      - key: CACHE_TTL
+        value: 3600
+      - key: DEBUG_MODE
+        value: false
+      - key: PORT
+        value: 8050
+    healthCheckPath: /

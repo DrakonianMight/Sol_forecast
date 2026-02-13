@@ -1,0 +1,20 @@
+# Dash and related packages
+dash==2.14.2
+dash-bootstrap-components==1.5.0
+dash-leaflet==1.0.14
+flask-caching==2.1.0
+
+# Data processing
+pandas==1.5.3
+numpy==1.24.2
+
+# Visualization
+plotly==5.14.1
+
+# Weather data
+meteostat==1.6.8
+
+# Utilities
+python-dateutil==2.8.2
+requests==2.28.1
+pytz>=2023.3
