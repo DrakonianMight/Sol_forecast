@@ -439,113 +439,119 @@ def create_deterministic_time_series_plot(location_name, site_lat, site_lon, sel
         # Filter for selected column
         df = df[[col for col in df.columns if display_column in col]]
         
+        # Check if we have any matching columns
+        if df.empty:
+            logger.warning(f"No data columns found for {display_column}")
+            st.warning(f"No data available for {display_column}")
+            return go.Figure()
+        
         # Add traces for each model
         for col in df.columns:
             cleaned_col = col.replace(display_column, '').strip('_')
-        color = deterministic_color_map.get(cleaned_col, 'black')
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df[col], 
-            mode='lines', 
-            name=cleaned_col, 
-            line=dict(color=color)
-        ))
-    
-    # Add observational data if available
-    obs_column = column_mapping.get(display_column, display_column)
-    if obs_column in obs_data.columns:
-        obs_index = obs_data.index
-        if timezone != 'UTC':
-            try:
-                tz = pytz.timezone(timezone)
-                if obs_index.tz is None:
-                    obs_index = obs_index.tz_localize('UTC').tz_convert(tz)
-                else:
-                    obs_index = obs_index.tz_convert(tz)
-            except Exception:
-                pass
+            color = deterministic_color_map.get(cleaned_col, 'black')
+            fig.add_trace(go.Scatter(
+                x=df.index, y=df[col], 
+                mode='lines', 
+                name=cleaned_col, 
+                line=dict(color=color)
+            ))
         
-        fig.add_trace(go.Scatter(
-            x=obs_index,
-            y=obs_data[obs_column],
-            mode='markers',
-            name='Observations',
-            marker=dict(color='black', size=4, symbol='circle')
-        ))
-    
-    # Add vertical line for current time
-    try:
-        tz = pytz.timezone(timezone)
-        current_time = datetime.now(tz)
+        # Add observational data if available
+        obs_column = column_mapping.get(display_column, display_column)
+        if obs_data is not None and not obs_data.empty and obs_column in obs_data.columns:
+            obs_index = obs_data.index
+            if timezone != 'UTC':
+                try:
+                    tz = pytz.timezone(timezone)
+                    if obs_index.tz is None:
+                        obs_index = obs_index.tz_localize('UTC').tz_convert(tz)
+                    else:
+                        obs_index = obs_index.tz_convert(tz)
+                except Exception:
+                    pass
+            
+            fig.add_trace(go.Scatter(
+                x=obs_index,
+                y=obs_data[obs_column],
+                mode='markers',
+                name='Observations',
+                marker=dict(color='black', size=4, symbol='circle')
+            ))
         
-        fig.add_shape(
-            type="line",
-            x0=current_time,
-            x1=current_time,
-            y0=0,
-            y1=1,
-            yref="paper",
-            line=dict(color="red", width=2, dash="dash")
-        )
-        
-        fig.add_annotation(
-            x=current_time,
-            y=1.02,
-            yref="paper",
-            text="Now",
-            showarrow=False,
-            font=dict(color="red", size=12),
-            xanchor="left"
-        )
-    except Exception:
-        pass
-    
-    # Add threshold lines if provided
-    if thresholds and len(df.index) > 0:
-        for threshold in thresholds:
+        # Add vertical line for current time
+        try:
+            tz = pytz.timezone(timezone)
+            current_time = datetime.now(tz)
+            
             fig.add_shape(
                 type="line",
-                x0=df.index.min(),
-                x1=df.index.max(),
-                y0=threshold,
-                y1=threshold,
-                line=dict(color="orange", width=2, dash="dash"),
-                name=f'Threshold: {threshold}'
+                x0=current_time,
+                x1=current_time,
+                y0=0,
+                y1=1,
+                yref="paper",
+                line=dict(color="red", width=2, dash="dash")
             )
             
-            # Add annotation for threshold
             fig.add_annotation(
-                x=df.index.max(),
-                y=threshold,
-                text=f'{threshold}',
+                x=current_time,
+                y=1.02,
+                yref="paper",
+                text="Now",
                 showarrow=False,
-                font=dict(color="orange", size=10),
-                xanchor="left",
-                xshift=5,
-                bgcolor="white"
+                font=dict(color="red", size=12),
+                xanchor="left"
             )
-    
-    # Update layout
-    fig.update_layout(
-        title=f'Deterministic Forecast - {location_name} - {display_column}',
-        yaxis_title=get_yaxis_title(display_column),
-        legend=dict(
-            title='Model',
-            font=dict(size=9),
-            orientation="h",
-            yanchor="bottom",
-            y=-0.35,
-            xanchor="left",
-            x=0
-        ),
-        xaxis=dict(showgrid=True, title='Time'),
-        yaxis=dict(showgrid=True),
-        hovermode="x unified",
-        margin=dict(l=30, r=30, t=40, b=120),
-        template="simple_white",
-        height=450
-    )
-    
-    return fig
+        except Exception:
+            pass
+        
+        # Add threshold lines if provided
+        if thresholds and len(df.index) > 0:
+            for threshold in thresholds:
+                fig.add_shape(
+                    type="line",
+                    x0=df.index.min(),
+                    x1=df.index.max(),
+                    y0=threshold,
+                    y1=threshold,
+                    line=dict(color="orange", width=2, dash="dash"),
+                    name=f'Threshold: {threshold}'
+                )
+                
+                # Add annotation for threshold
+                fig.add_annotation(
+                    x=df.index.max(),
+                    y=threshold,
+                    text=f'{threshold}',
+                    showarrow=False,
+                    font=dict(color="orange", size=10),
+                    xanchor="left",
+                    xshift=5,
+                    bgcolor="white"
+                )
+        
+        # Update layout
+        fig.update_layout(
+            title=f'Deterministic Forecast - {location_name} - {display_column}',
+            yaxis_title=get_yaxis_title(display_column),
+            legend=dict(
+                title='Model',
+                font=dict(size=9),
+                orientation="h",
+                yanchor="bottom",
+                y=-0.35,
+                xanchor="left",
+                x=0
+            ),
+            xaxis=dict(showgrid=True, title='Time'),
+            yaxis=dict(showgrid=True),
+            hovermode="x unified",
+            margin=dict(l=30, r=30, t=40, b=120),
+            template="simple_white",
+            height=450
+        )
+        
+        return fig
 
 def create_ensemble_time_series_plot(location_name, site_lat, site_lon, selected_variable, selected_models, 
                                      show_percentiles=True, show_members=False, timezone='UTC', precip_accum=None, thresholds=None):
