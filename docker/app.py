@@ -242,27 +242,6 @@ def accumulate_precipitation(df: pd.DataFrame, variable: str, hours: int) -> pd.
     
     return result_df
 
-# Cache precipitation accumulation results
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def accumulate_precipitation_cached(lat, lon, location_name, variable, hours):
-    """Cached version of precipitation accumulation - avoids recomputing on every interaction
-    
-    Args:
-        lat, lon, location_name: Location identifiers (used for cache key)
-        variable: Variable name
-        hours: Accumulation period
-    
-    Returns:
-        DataFrame with accumulated precipitation
-    """
-    # Fetch base precipitation data
-    df = fetch_hourly_data(lat, lon, location_name, ['precipitation'])
-    if df is None or df.empty:
-        return None
-    
-    # Apply accumulation
-    return accumulate_precipitation(df, variable, hours)
-
 # Function to fetch nearest stations from Meteostat and get observational data
 @with_error_handling
 @st.cache_data(ttl=CACHE_TTL * 2, show_spinner=False)  # Cache for 2 hours (stations don't change often)
@@ -404,23 +383,18 @@ def create_site_map(scatter_geo_df, selected_site=None, custom_lat=None, custom_
     
     return m
 
-def create_deterministic_time_series_plot(location_name, site_lat, site_lon, selected_column, timezone='UTC', precip_accum=None, thresholds=None, include_obs=False):
-    """Create time series plot for selected variable with optional threshold lines
-    
-    Args:
-        include_obs: If True, fetch and display observational data (slower). Default False for speed.
-    """
+def create_deterministic_time_series_plot(location_name, site_lat, site_lon, selected_column, timezone='UTC', precip_accum=None, thresholds=None):
+    """Create time series plot for selected variable with optional threshold lines"""
     with track_performance(f"Create deterministic plot: {selected_column}"):
         fig = go.Figure()
         
-        # Only fetch observational data if explicitly requested (saves 2-3 seconds)
+        # Fetch observational data
         obs_data = None
-        if include_obs:
-            try:
-                with track_performance("Fetch observational data"):
-                    obs_data = get_nearest_station_data(site_lat, site_lon)
-            except Exception as e:
-                logger.warning(f"Could not fetch observational data: {e}")
+        try:
+            with track_performance("Fetch observational data"):
+                obs_data = get_nearest_station_data(site_lat, site_lon)
+        except Exception as e:
+            logger.warning(f"Could not fetch observational data: {e}")
         
         # All variables with their types
         all_variables = [(var, 'hourly') for var in hourly_params] + \
@@ -434,22 +408,21 @@ def create_deterministic_time_series_plot(location_name, site_lat, site_lon, sel
         
         # Get data based on type
         with track_performance(f"Fetch {selected_data_type} forecast data"):
-            # Special case: Use cached precipitation accumulation if applicable
-            if selected_column == 'precipitation' and precip_accum:
-                logger.info(f"Using cached precipitation accumulation ({precip_accum}h)")
-                df = accumulate_precipitation_cached(site_lat, site_lon, location_name, 'precipitation', precip_accum)
-                display_column = f'precipitation_{precip_accum}h'
-            else:
-                # Normal data fetch
-                if selected_data_type == 'hourly':
-                    df = fetch_hourly_data(site_lat, site_lon, location_name, hourly_params)
-                elif selected_data_type == 'daily':
-                    df = fetch_daily_data(site_lat, site_lon, location_name, daily_params)
+            if selected_data_type == 'hourly':
+                df = fetch_hourly_data(site_lat, site_lon, location_name, hourly_params)
+            elif selected_data_type == 'daily':
+                df = fetch_daily_data(site_lat, site_lon, location_name, daily_params)
             
             if df is None or df.empty:
                 logger.error(f"No forecast data available for {location_name}")
                 st.error("⚠️ No forecast data available. Please try again later.")
                 return go.Figure()
+        
+        # Apply precipitation accumulation if needed
+        if selected_column == 'precipitation' and precip_accum:
+            with track_performance("Calculate precipitation accumulation"):
+                df = accumulate_precipitation(df, 'precipitation', precip_accum)
+                display_column = f'precipitation_{precip_accum}h'
         
         # Convert timezone if needed
         if timezone != 'UTC':
@@ -842,13 +815,6 @@ def main():
             key='forecast_type'
         )
         
-        # Performance option: Include observational data
-        include_observations = st.checkbox(
-            "Include Observations",
-            value=False,
-            help="⚡ Disable for faster loading (saves 2-3 seconds)"
-        )
-        
         # Timezone selection
         timezone = st.selectbox(
             'Timezone',
@@ -1119,7 +1085,7 @@ def main():
             with st.spinner('Loading forecast data...'):
                 try:
                     ts_fig = create_deterministic_time_series_plot(
-                        location_name, site_lat, site_lon, selected_variable, timezone, precip_accum, plot_thresholds, include_observations
+                        location_name, site_lat, site_lon, selected_variable, timezone, precip_accum, plot_thresholds
                     )
                     st.plotly_chart(ts_fig, use_container_width=True)
                 except Exception as e:
