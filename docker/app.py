@@ -8,6 +8,90 @@ import pytz
 import numpy as np
 import folium
 from streamlit_folium import st_folium
+import logging
+import time
+import os
+from functools import wraps
+import hashlib
+
+# Configure logging for production
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Environment configuration
+CACHE_TTL = int(os.getenv('CACHE_TTL', 3600))  # 1 hour default
+DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
+
+# Performance tracking context manager
+class PerformanceTracker:
+    """Track and log performance of code sections"""
+    def __init__(self, section_name):
+        self.section_name = section_name
+        self.start = None
+    
+    def __enter__(self):
+        self.start = time.time()
+        logger.info(f"⏱️  Starting: {self.section_name}")
+        return self
+    
+    def __exit__(self, *args):
+        duration = time.time() - self.start
+        logger.info(f"✅ {self.section_name} completed in {duration:.2f}s")
+        if DEBUG_MODE:
+            st.caption(f"⚡ {self.section_name}: {duration:.2f}s")
+
+def track_performance(section_name):
+    """Decorator or context manager for performance tracking"""
+    return PerformanceTracker(section_name)
+
+# Error handling decorator
+def with_error_handling(func):
+    """Decorator for consistent error handling and logging"""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"❌ Error in {func.__name__}: {str(e)}", exc_info=True)
+            st.error(f"⚠️ Error: {str(e)}")
+            if DEBUG_MODE:
+                st.exception(e)
+            return None
+    return wrapper
+
+# Connection pooling for HTTP requests
+@st.cache_resource
+def get_http_session():
+    """Create requests session with connection pooling and retries"""
+    import requests
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+    
+    logger.info("🔧 Initializing HTTP session with connection pooling")
+    session = requests.Session()
+    
+    # Configure retries for resilience
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "POST"]
+    )
+    
+    # Configure adapter with connection pooling
+    adapter = HTTPAdapter(
+        max_retries=retry_strategy,
+        pool_connections=10,
+        pool_maxsize=20
+    )
+    
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    
+    return session
 
 # Page configuration
 st.set_page_config(
@@ -159,44 +243,72 @@ def accumulate_precipitation(df: pd.DataFrame, variable: str, hours: int) -> pd.
     return result_df
 
 # Function to fetch nearest stations from Meteostat and get observational data
-@st.cache_data(ttl=3600)  # Cache for 1 hour
+@with_error_handling
+@st.cache_data(ttl=CACHE_TTL * 2, show_spinner=False)  # Cache for 2 hours (stations don't change often)
 def get_nearest_station_data(lat, lon):
-    stations = Stations().nearby(lat, lon).fetch(1)
-    station_id = stations.index[0]
-    station_name = stations['name'][0]
-    station_lat = stations['latitude'][0]
-    station_lon = stations['longitude'][0]
-    
-    end = datetime.today()
-    start = end - timedelta(days=1)
-    
-    hourly_data = Hourly(station_id, start, end).fetch()
-    hourly_data["station_name"] = station_name
-    hourly_data["station_lat"] = station_lat
-    hourly_data["station_lon"] = station_lon
-    
-    return hourly_data
+    """Fetch observational data from nearest weather station"""
+    with track_performance(f"Fetch station data near {lat:.2f}, {lon:.2f}"):
+        stations = Stations().nearby(lat, lon).fetch(1)
+        
+        if stations.empty:
+            logger.warning(f"No stations found near {lat}, {lon}")
+            return None
+        
+        station_id = stations.index[0]
+        station_name = stations['name'][0]
+        station_lat = stations['latitude'][0]
+        station_lon = stations['longitude'][0]
+        
+        end = datetime.today()
+        start = end - timedelta(days=1)
+        
+        hourly_data = Hourly(station_id, start, end).fetch()
+        
+        if hourly_data.empty:
+            logger.warning(f"No data available for station {station_id}")
+            return None
+        
+        hourly_data["station_name"] = station_name
+        hourly_data["station_lat"] = station_lat
+        hourly_data["station_lon"] = station_lon
+        
+        logger.info(f"✅ Fetched {len(hourly_data)} records from {station_name}")
+        return hourly_data
 
 # Load site data
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def load_site_data():
+    """Load predefined site locations from CSV"""
+    logger.info("📍 Loading site data")
     return pd.read_csv('./siteList.csv', skipinitialspace=True, usecols=['site', 'lat', 'lon'])
 
 # Cached data fetching functions to prevent repeated API calls
-@st.cache_data(ttl=1800)  # Cache for 30 minutes
+@with_error_handling
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)  # Cache for 1 hour
 def fetch_hourly_data(lat, lon, location_name, variables):
-    """Fetch hourly forecast data with caching"""
-    return om_extract.getData([str(lat)], [str(lon)], [location_name], variables=variables)
+    """Fetch hourly forecast data with caching and error handling"""
+    with track_performance(f"Fetch hourly data for {location_name}"):
+        data = om_extract.getData([str(lat)], [str(lon)], [location_name], variables=variables)
+        logger.info(f"✅ Fetched hourly data: {data.shape if data is not None else 'None'}")
+        return data
 
-@st.cache_data(ttl=1800)  # Cache for 30 minutes
+@with_error_handling
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)  # Cache for 1 hour
 def fetch_daily_data(lat, lon, location_name, variables):
-    """Fetch daily forecast data with caching"""
-    return om_extract.getDailyData([str(lat)], [str(lon)], [location_name], variables=variables)
+    """Fetch daily forecast data with caching and error handling"""
+    with track_performance(f"Fetch daily data for {location_name}"):
+        data = om_extract.getDailyData([str(lat)], [str(lon)], [location_name], variables=variables)
+        logger.info(f"✅ Fetched daily data: {data.shape if data is not None else 'None'}")
+        return data
 
-@st.cache_data(ttl=1800)  # Cache for 30 minutes
+@with_error_handling
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)  # Cache for 1 hour
 def fetch_ensemble_data(lat, lon, location_name, variable, models):
-    """Fetch ensemble forecast data with caching"""
-    return om_extract.getEnsembleData([str(lat)], [str(lon)], [location_name], [variable], models)
+    """Fetch ensemble forecast data with caching and error handling"""
+    with track_performance(f"Fetch ensemble data for {location_name}"):
+        data = om_extract.getEnsembleData([str(lat)], [str(lon)], [location_name], [variable], models)
+        logger.info(f"✅ Fetched ensemble data: {data.shape if data is not None else 'None'}")
+        return data
 
 def create_site_map(scatter_geo_df, selected_site=None, custom_lat=None, custom_lon=None):
     """Create an interactive Folium map with site locations"""
@@ -273,49 +385,63 @@ def create_site_map(scatter_geo_df, selected_site=None, custom_lat=None, custom_
 
 def create_deterministic_time_series_plot(location_name, site_lat, site_lon, selected_column, timezone='UTC', precip_accum=None, thresholds=None):
     """Create time series plot for selected variable with optional threshold lines"""
-    fig = go.Figure()
-    
-    # Fetch observational data
-    obs_data = get_nearest_station_data(site_lat, site_lon)
-    
-    # All variables with their types
-    all_variables = [(var, 'hourly') for var in hourly_params] + \
-                    [(var, 'daily') for var in daily_params]
-    
-    # Determine data type
-    selected_data_type = next(data_type for var, data_type in all_variables if var == selected_column)
-    
-    # Store original column name for display
-    display_column = selected_column
-    
-    # Get data based on type
-    if selected_data_type == 'hourly':
-        df = fetch_hourly_data(site_lat, site_lon, location_name, hourly_params)
-    elif selected_data_type == 'daily':
-        df = fetch_daily_data(site_lat, site_lon, location_name, daily_params)
-    
-    # Apply precipitation accumulation if needed
-    if selected_column == 'precipitation' and precip_accum:
-        df = accumulate_precipitation(df, 'precipitation', precip_accum)
-        display_column = f'precipitation_{precip_accum}h'
-    
-    # Convert timezone if needed
-    if timezone != 'UTC':
+    with track_performance(f"Create deterministic plot: {selected_column}"):
+        fig = go.Figure()
+        
+        # Fetch observational data
+        obs_data = None
         try:
-            tz = pytz.timezone(timezone)
-            if df.index.tz is None:
-                df.index = df.index.tz_localize('UTC').tz_convert(tz)
-            else:
-                df.index = df.index.tz_convert(tz)
-        except Exception:
-            pass
-    
-    # Filter for selected column
-    df = df[[col for col in df.columns if display_column in col]]
-    
-    # Add traces for each model
-    for col in df.columns:
-        cleaned_col = col.replace(display_column, '').strip('_')
+            with track_performance("Fetch observational data"):
+                obs_data = get_nearest_station_data(site_lat, site_lon)
+        except Exception as e:
+            logger.warning(f"Could not fetch observational data: {e}")
+        
+        # All variables with their types
+        all_variables = [(var, 'hourly') for var in hourly_params] + \
+                        [(var, 'daily') for var in daily_params]
+        
+        # Determine data type
+        selected_data_type = next(data_type for var, data_type in all_variables if var == selected_column)
+        
+        # Store original column name for display
+        display_column = selected_column
+        
+        # Get data based on type
+        with track_performance(f"Fetch {selected_data_type} forecast data"):
+            if selected_data_type == 'hourly':
+                df = fetch_hourly_data(site_lat, site_lon, location_name, hourly_params)
+            elif selected_data_type == 'daily':
+                df = fetch_daily_data(site_lat, site_lon, location_name, daily_params)
+            
+            if df is None or df.empty:
+                logger.error(f"No forecast data available for {location_name}")
+                st.error("⚠️ No forecast data available. Please try again later.")
+                return go.Figure()
+        
+        # Apply precipitation accumulation if needed
+        if selected_column == 'precipitation' and precip_accum:
+            with track_performance("Calculate precipitation accumulation"):
+                df = accumulate_precipitation(df, 'precipitation', precip_accum)
+                display_column = f'precipitation_{precip_accum}h'
+        
+        # Convert timezone if needed
+        if timezone != 'UTC':
+            try:
+                with track_performance(f"Convert to {timezone}"):
+                    tz = pytz.timezone(timezone)
+                    if df.index.tz is None:
+                        df.index = df.index.tz_localize('UTC').tz_convert(tz)
+                    else:
+                        df.index = df.index.tz_convert(tz)
+            except Exception as e:
+                logger.warning(f"Timezone conversion failed: {e}")
+        
+        # Filter for selected column
+        df = df[[col for col in df.columns if display_column in col]]
+        
+        # Add traces for each model
+        for col in df.columns:
+            cleaned_col = col.replace(display_column, '').strip('_')
         color = deterministic_color_map.get(cleaned_col, 'black')
         fig.add_trace(go.Scatter(
             x=df.index, y=df[col], 
@@ -645,11 +771,24 @@ def create_exceedance_plot(df_exceedance, thresholds, selected_models, variable,
 
 # Main app
 def main():
+    """Main application function with performance monitoring"""
+    # Track page load
+    page_start = time.time()
+    
+    # Initialize session state for performance tracking
+    if 'page_loads' not in st.session_state:
+        st.session_state.page_loads = 0
+        st.session_state.load_times = []
+    
+    st.session_state.page_loads += 1
+    logger.info(f"📊 Page load #{st.session_state.page_loads}")
+    
     # Simple compact header
     st.markdown("## Weather Forecast Dashboard")
     
     # Load site data
-    scatter_geo_df = load_site_data()
+    with track_performance("Load site data"):
+        scatter_geo_df = load_site_data()
     
     # Sidebar for options
     with st.sidebar:
@@ -987,8 +1126,33 @@ def main():
                 
                 except Exception as e:
                     st.error(f"Error loading ensemble data: {str(e)}")
+                    logger.error(f"Ensemble plot error: {e}", exc_info=True)
         else:
             st.warning("Please select at least one ensemble model.")
+    
+    # Track page load completion
+    page_duration = time.time() - page_start
+    st.session_state.load_times.append(page_duration)
+    
+    # Keep only last 10 load times
+    if len(st.session_state.load_times) > 10:
+        st.session_state.load_times = st.session_state.load_times[-10:]
+    
+    logger.info(f"✅ Page loaded in {page_duration:.2f}s")
+    
+    # Performance stats in sidebar (optional, for monitoring)
+    if DEBUG_MODE or st.sidebar.checkbox("🔧 Show Performance Stats", value=False):
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("⚡ Performance")
+        st.sidebar.metric("Page Loads", st.session_state.page_loads)
+        st.sidebar.metric("Last Load Time", f"{page_duration:.2f}s")
+        avg_load = np.mean(st.session_state.load_times)
+        st.sidebar.metric("Avg Load Time", f"{avg_load:.2f}s")
+        
+        # Cache info
+        cache_info = st.cache_data.clear.__doc__
+        st.sidebar.caption("💾 Using Streamlit in-memory cache")
+        st.sidebar.caption(f"⏰ Cache TTL: {CACHE_TTL}s ({CACHE_TTL//60}min)")
 
 # Run the app
 if __name__ == '__main__':

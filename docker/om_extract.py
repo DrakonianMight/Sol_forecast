@@ -1,18 +1,59 @@
 import requests
 import pandas as pd
+import logging
+import time
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Create a session with connection pooling and retries (reused across requests)
+_session = None
+
+def get_session():
+    """Get or create a requests session with connection pooling"""
+    global _session
+    if _session is None:
+        logger.info("🔧 Initializing HTTP session with connection pooling")
+        _session = requests.Session()
+        
+        # Configure retries
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "POST"]
+        )
+        
+        # Configure adapter with connection pooling
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=10,
+            pool_maxsize=20
+        )
+        
+        _session.mount("https://", adapter)
+        _session.mount("http://", adapter)
+    
+    return _session
 
 def getData(lat, lon, sites, variables = ['temperature_2m','cloud_cover'], models = ['ecmwf_ifs025','ecmwf_aifs025','bom_access_global','gfs_global', 'cma_grapes_global','ukmo_global_deterministic_10km']):
-    """_summary_
+    """Fetch hourly forecast data from Open-Meteo API with connection pooling
 
     Args:
-        lat (_type_): _description_
-        lon (_type_): _description_
-        sites (_type_): _description_
-        variables (list, optional): _description_. Defaults to ['temperature_2m','cloud_cover'].
+        lat: Latitude(s)
+        lon: Longitude(s)
+        sites: Site name(s)
+        variables: Weather variables to fetch
+        models: Forecast models to use
 
     Returns:
-        _type_: _description_
+        DataFrame with forecast data
     """
+    start_time = time.time()
+    
     if len(sites) > 1:
         lat = ','.join(lat)
         lon = ','.join(lon)
@@ -24,13 +65,20 @@ def getData(lat, lon, sites, variables = ['temperature_2m','cloud_cover'], model
 
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly={variables}&models={models}&timezone=GMT"
 
-    # Retrieve ECMWF temperatures
-    response = requests.get(url)
-    if response.status_code == 200:
+    # Use session for connection pooling
+    session = get_session()
+    
+    try:
+        response = session.get(url, timeout=30)
+        response.raise_for_status()
         data = response.json()
-
-    else:
-        print("Error retrieving ACCESS data from Open Meteo API.")
+        
+        duration = time.time() - start_time
+        logger.info(f"✅ API call completed in {duration:.2f}s for {len(sites)} site(s)")
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Error retrieving data from Open Meteo API: {e}")
+        raise
 
     def makeFrame(siteData):
         mdata = pd.DataFrame(siteData['hourly'])
@@ -50,17 +98,20 @@ def getData(lat, lon, sites, variables = ['temperature_2m','cloud_cover'], model
 
 
 def getDailyData(lat, lon, sites, variables = ['temperature_2m_max','temperature_2m_min'], models = ['ecmwf_ifs025','ecmwf_aifs025','bom_access_global','gfs_global', 'cma_grapes_global','ukmo_global_deterministic_10km']):
-    """_summary_
+    """Fetch daily forecast data from Open-Meteo API with connection pooling
 
     Args:
-        lat (_type_): _description_
-        lon (_type_): _description_
-        sites (_type_): _description_
-        variables (list, optional): _description_. Defaults to ['temperature_2m','cloud_cover'].
+        lat: Latitude(s)
+        lon: Longitude(s)
+        sites: Site name(s)
+        variables: Daily weather variables to fetch
+        models: Forecast models to use
 
     Returns:
-        _type_: _description_
+        DataFrame with daily forecast data
     """
+    start_time = time.time()
+    
     if len(sites) > 1:
         lat = ','.join(lat)
         lon = ','.join(lon)
@@ -72,13 +123,20 @@ def getDailyData(lat, lon, sites, variables = ['temperature_2m_max','temperature
 
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily={variables}&models={models}&timezone=GMT"
 
-    # Retrieve ECMWF temperatures
-    response = requests.get(url)
-    if response.status_code == 200:
+    # Use session for connection pooling
+    session = get_session()
+    
+    try:
+        response = session.get(url, timeout=30)
+        response.raise_for_status()
         data = response.json()
-
-    else:
-        print("Error retrieving ACCESS data from Open Meteo API.")
+        
+        duration = time.time() - start_time
+        logger.info(f"✅ Daily API call completed in {duration:.2f}s for {len(sites)} site(s)")
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Error retrieving daily data from Open Meteo API: {e}")
+        raise
 
     def makeFrame(siteData):
         mdata = pd.DataFrame(siteData['daily'])
@@ -140,12 +198,13 @@ def getEnsembleData(lat_list: List[str], lon_list: List[str], site_list: List[st
             }
             
             try:
-                response = requests.get(base_url, params=params, timeout=30)
+                session = get_session()
+                response = session.get(base_url, params=params, timeout=30)
                 response.raise_for_status()
                 data = response.json()
                 
                 if 'hourly' not in data:
-                    print(f"No hourly data found for {site} with {model}")
+                    logger.warning(f"No hourly data found for {site} with {model}")
                     continue
                 
                 # Parse the datetime index
@@ -177,12 +236,13 @@ def getEnsembleData(lat_list: List[str], lon_list: List[str], site_list: List[st
                             
                 # Append the resulting wide DataFrame for this site/model
                 all_site_model_data.append(df_temp)
+                logger.info(f"✅ Fetched ensemble data for {site} with {model}")
                 
             except requests.exceptions.RequestException as e:
-                print(f"Error fetching ensemble data for {site} with {model}: {e}")
+                logger.error(f"❌ Error fetching ensemble data for {site} with {model}: {e}")
                 continue
             except Exception as e:
-                print(f"Error parsing ensemble data for {site} with {model}: {e}")
+                logger.error(f"❌ Error parsing ensemble data for {site} with {model}: {e}")
                 continue
     
     if not all_site_model_data:
